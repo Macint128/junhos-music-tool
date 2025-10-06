@@ -5,170 +5,165 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>🎹 Mini FL Studio</title>
+<title>🎵 MP3 Pitch Controller</title>
 <style>
 body {
   background: #111;
   color: #fff;
   margin: 0;
   font-family: monospace;
-  overflow: hidden;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-}
-.controls {
-  position: fixed;
-  top: 0;
-  width: 100%;
-  background: #222;
   text-align: center;
+  overflow: hidden;
+}
+h1 {
+  margin-top: 1.5rem;
+}
+input[type=file] {
+  background: #333;
+  color: #fff;
+  border: none;
   padding: 0.5rem;
-  z-index: 10;
+  border-radius: 8px;
+  margin: 1rem 0;
 }
 button {
-  margin: 0.3rem;
-  padding: 0.5rem 1rem;
   background: #444;
-  color: white;
+  color: #fff;
   border: none;
   border-radius: 8px;
+  padding: 0.5rem 1rem;
   font-size: 1rem;
+  margin: 0.3rem;
 }
-#pianoRoll {
-  position: absolute;
-  top: 3rem;
-  left: 0;
-  width: 100%;
-  height: calc(100vh - 3rem);
-  background: #1e1e1e;
-  touch-action: none;
+#controls {
+  margin-top: 1rem;
+}
+#pitch {
+  width: 80%;
+  margin: 1rem 0;
+}
+label {
+  display: block;
+  margin-top: 0.5rem;
+}
+canvas {
+  width: 90%;
+  height: 120px;
+  background: #222;
+  margin: 1rem auto;
+  border-radius: 8px;
+  display: block;
 }
 </style>
 </head>
 <body>
 
-<div class="controls">
+<h1>🎵 MP3 피치 조정 툴</h1>
+<input type="file" id="fileInput" accept="audio/*">
+<canvas id="visualizer"></canvas>
+
+<div id="controls">
+  <label>피치 조정: <span id="pitchValue">1.0x</span></label>
+  <input type="range" id="pitch" min="0.5" max="2" step="0.01" value="1">
+  <br>
   <button id="playBtn">▶️ 재생</button>
+  <button id="pauseBtn">⏸️ 일시정지</button>
   <button id="stopBtn">⏹️ 정지</button>
-  <button id="clearBtn">🧹 전체삭제</button>
 </div>
 
-<canvas id="pianoRoll"></canvas>
-
 <script>
-const canvas = document.getElementById("pianoRoll");
-const ctx = canvas.getContext("2d");
+let audioCtx, source, analyser, buffer, gainNode;
+let isPlaying = false;
+let startTime = 0;
+let pausedAt = 0;
+let pitch = 1.0;
+
+const fileInput = document.getElementById("fileInput");
 const playBtn = document.getElementById("playBtn");
+const pauseBtn = document.getElementById("pauseBtn");
 const stopBtn = document.getElementById("stopBtn");
-const clearBtn = document.getElementById("clearBtn");
+const pitchSlider = document.getElementById("pitch");
+const pitchValue = document.getElementById("pitchValue");
+const canvas = document.getElementById("visualizer");
+const ctx2d = canvas.getContext("2d");
 
-// 🔧 크기 자동 조정
-function resizeCanvas() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight - 48;
-  drawGrid();
-}
-window.addEventListener("resize", resizeCanvas);
-resizeCanvas();
-
-let notes = JSON.parse(localStorage.getItem("notes") || "[]");
-const noteHeight = 30;
-const noteWidth = 60;
-let isDragging = false, dragNote = null;
-let audioCtx, isPlaying = false;
-
-// 🎨 그리드 및 노트 렌더링
-function drawGrid() {
-  ctx.fillStyle = "#1e1e1e";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  for (let y = 0; y < canvas.height; y += noteHeight) {
-    ctx.fillStyle = y % 60 === 0 ? "#2a2a2a" : "#252525";
-    ctx.fillRect(0, y, canvas.width, noteHeight - 1);
-  }
-
-  // 노트 표시
-  notes.forEach(n => {
-    ctx.fillStyle = "#0f0";
-    ctx.fillRect(n.x, n.y, n.width, noteHeight - 2);
-  });
-}
-
-// 📱 터치 이벤트
-function getTouchPos(e) {
-  const rect = canvas.getBoundingClientRect();
-  const touch = e.touches[0];
-  return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-}
-
-canvas.addEventListener("touchstart", e => {
-  const { x, y } = getTouchPos(e);
-  const gridX = Math.floor(x / noteWidth) * noteWidth;
-  const gridY = Math.floor(y / noteHeight) * noteHeight;
-
-  const clicked = notes.find(n =>
-    x >= n.x && x <= n.x + n.width && y >= n.y && y <= n.y + noteHeight
-  );
-
-  if (clicked) {
-    dragNote = clicked;
-    isDragging = true;
-  } else {
-    notes.push({ x: gridX, y: gridY, width: noteWidth });
-  }
-  drawGrid();
-});
-
-canvas.addEventListener("touchmove", e => {
-  if (isDragging && dragNote) {
-    const { x } = getTouchPos(e);
-    dragNote.width = Math.max(noteWidth, Math.floor((x - dragNote.x) / noteWidth) * noteWidth);
-    drawGrid();
-  }
-});
-
-canvas.addEventListener("touchend", () => {
-  isDragging = false;
-  dragNote = null;
-  localStorage.setItem("notes", JSON.stringify(notes));
-});
-
-// 🎵 오디오 재생
-playBtn.addEventListener("click", () => {
-  if (isPlaying) return;
+fileInput.addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const arrayBuffer = await file.arrayBuffer();
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  buffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+  analyser = audioCtx.createAnalyser();
+  gainNode = audioCtx.createGain();
+  analyser.fftSize = 1024;
+  drawVisualizer();
+});
+
+function playAudio(offset = 0) {
+  if (!buffer) return;
+  source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.playbackRate.value = pitch;
+  source.connect(analyser);
+  analyser.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  startTime = audioCtx.currentTime - offset;
+  source.start(0, offset);
   isPlaying = true;
-  const bpm = 120;
-  const beat = 60 / bpm;
 
-  notes.forEach(n => {
-    const time = (n.x / noteWidth) * beat * 0.5;
-    const dur = (n.width / noteWidth) * beat * 0.5;
-    const pitch = 220 * Math.pow(2, (canvas.height - n.y) / noteHeight / 12);
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    gain.gain.setValueAtTime(0.1, audioCtx.currentTime + time);
-    osc.frequency.setValueAtTime(pitch, audioCtx.currentTime + time);
-    osc.start(audioCtx.currentTime + time);
-    osc.stop(audioCtx.currentTime + time + dur);
-  });
-  setTimeout(() => isPlaying = false, 4000);
-});
+  source.onended = () => {
+    isPlaying = false;
+  };
+}
 
-stopBtn.addEventListener("click", () => {
-  if (audioCtx) audioCtx.close();
-  isPlaying = false;
-});
+function stopAudio() {
+  if (source) {
+    source.stop();
+    isPlaying = false;
+    pausedAt = 0;
+  }
+}
 
-clearBtn.addEventListener("click", () => {
-  notes = [];
-  localStorage.removeItem("notes");
-  drawGrid();
-});
+playBtn.onclick = () => {
+  if (!isPlaying) {
+    playAudio(pausedAt);
+  }
+};
 
-drawGrid();
+pauseBtn.onclick = () => {
+  if (isPlaying && source) {
+    source.stop();
+    pausedAt = audioCtx.currentTime - startTime;
+    isPlaying = false;
+  }
+};
+
+stopBtn.onclick = () => {
+  stopAudio();
+};
+
+pitchSlider.oninput = e => {
+  pitch = parseFloat(e.target.value);
+  pitchValue.textContent = pitch.toFixed(2) + "x";
+  if (source) source.playbackRate.value = pitch;
+};
+
+// 🎶 비주얼라이저
+function drawVisualizer() {
+  requestAnimationFrame(drawVisualizer);
+  if (!analyser) return;
+  const dataArray = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(dataArray);
+  ctx2d.fillStyle = "#111";
+  ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+  const barWidth = (canvas.width / dataArray.length);
+  for (let i = 0; i < dataArray.length; i++) {
+    const barHeight = dataArray[i];
+    ctx2d.fillStyle = "#0f0";
+    ctx2d.fillRect(i * barWidth, canvas.height - barHeight / 2, barWidth, barHeight / 2);
+  }
+}
 </script>
 </body>
 </html>
